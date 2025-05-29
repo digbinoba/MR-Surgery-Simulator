@@ -4,9 +4,25 @@ using System.Collections;
 
 public class ToothExtractionSystem : MonoBehaviour
 {
+    [Header("State Management")]
+    public UIPanel uiPanel; // Reference to your UI panel
+    private ExtractionStateBase currentStateHandler;
+    private System.Collections.Generic.Dictionary<ExtractionState, ExtractionStateBase> stateHandlers;
+    
     [Header("Tooth Setup")]
     public GameObject[] availableTeeth; // Assign your separated teeth here
     public Transform patientHead; // Reference to patient head
+    
+    [Header("Anesthesia Settings")]
+    public float anesthesiaDistance = 0.1f; // How close syringe needs to be
+    public float anesthesiaTime = 3f; // How long to hold syringe
+    public float gracePeriod = 1f; // Allow 1 second out of range
+    public bool requireAnesthesiaInjection = true;
+    public AudioClip anesthesiaSound;
+
+    private bool anesthesiaComplete = false;
+    private float anesthesiaTimer = 0f;
+    private bool anesthesiaInProgress = false;
     
     [Header("Procedure Settings")]
     public bool startProcedureOnBegin = true;
@@ -30,7 +46,7 @@ public class ToothExtractionSystem : MonoBehaviour
     [Header("Debug")]
     public bool showDebugInfo = true;
     
-    private GameObject targetTooth;
+    public GameObject targetTooth;
     private GameObject targetToothHighlight;
     private Material originalToothMaterial;
     private bool procedureStarted = false;
@@ -43,6 +59,8 @@ public class ToothExtractionSystem : MonoBehaviour
     public enum ExtractionState
     {
         WaitingToStart,
+        AnesthesiaRequired,      // NEW
+        AnesthesiaAdministered,  // NEW
         ToothHighlighted,
         ForcepsNearTooth,
         ExtractionInProgress,
@@ -55,8 +73,34 @@ public class ToothExtractionSystem : MonoBehaviour
     private void Start()
     {
         InitializeSystem();
+        InitializeStates();
     }
     
+    private void InitializeStates()
+    {
+        stateHandlers = new System.Collections.Generic.Dictionary<ExtractionState, ExtractionStateBase>();
+    
+        // Add anesthesia state
+        var anesthesiaState = gameObject.GetComponent<AnesthesiaState>();
+        if (anesthesiaState == null) anesthesiaState = gameObject.AddComponent<AnesthesiaState>();
+        stateHandlers[ExtractionState.AnesthesiaRequired] = anesthesiaState;
+    
+        // Add extraction state ONLY for ToothHighlighted
+        var extractionState = gameObject.GetComponent<ExtractionToothState>();
+        if (extractionState == null) extractionState = gameObject.AddComponent<ExtractionToothState>();
+        stateHandlers[ExtractionState.ToothHighlighted] = extractionState;
+    
+        // DON'T add handlers for ForcepsNearTooth, ExtractionInProgress, etc.
+        // Let them use the original logic
+    
+        // Initialize all state handlers
+        foreach (var handler in stateHandlers.Values)
+        {
+            handler.Initialize(this);
+        }
+    
+        Debug.Log($"Initialized {stateHandlers.Count} state handlers");
+    }
     private void InitializeSystem()
     {
         // Setup audio
@@ -87,6 +131,31 @@ public class ToothExtractionSystem : MonoBehaviour
         }
         
         Debug.Log($"Tooth Extraction System initialized with {availableTeeth.Length} teeth");
+    }
+    
+    public void TransitionToState(ExtractionState newState)
+    {
+        // Exit current state
+        if (currentStateHandler != null)
+        {
+            currentStateHandler.OnExitState();
+        }
+    
+        // Update current state
+        currentState = newState;
+    
+        // Enter new state if handler exists
+        if (stateHandlers.ContainsKey(newState))
+        {
+            currentStateHandler = stateHandlers[newState];
+            currentStateHandler.OnEnterState();
+            Debug.Log($"Transitioned to {newState} with handler");
+        }
+        else
+        {
+            currentStateHandler = null; // Clear handler for states without custom handlers
+            Debug.Log($"Transitioned to {newState} - no handler, will use original logic");
+        }
     }
     
     private void CreateTargetToothMaterial()
@@ -131,20 +200,35 @@ public class ToothExtractionSystem : MonoBehaviour
     
     public void StartProcedure()
     {
-        if (availableTeeth == null || availableTeeth.Length == 0)
-        {
-            Debug.LogError("No teeth available for extraction!");
-            return;
-        }
-        
-        SelectRandomTargetTooth();
-        procedureStarted = true;
-        currentState = ExtractionState.ToothHighlighted;
-        
-        if (showDebugInfo)
-        {
-            Debug.Log($"Tooth extraction procedure started. Target: {targetTooth.name}");
-        }
+            if (availableTeeth == null || availableTeeth.Length == 0)
+            {
+                Debug.LogError("No teeth available for extraction!");
+                return;
+            }
+    
+            SelectRandomTargetTooth();
+            procedureStarted = true;
+    
+            // Initialize states if not done
+            if (stateHandlers == null)
+            {
+                InitializeStates();
+            }
+    
+            // Check if anesthesia is already complete
+            AnesthesiaState anesthesiaState = GetState<AnesthesiaState>();
+            if (anesthesiaState != null && anesthesiaState.IsAnesthesiaComplete())
+            {
+                // Skip anesthesia, go straight to extraction
+                Debug.Log("Anesthesia already complete, starting extraction");
+                TransitionToState(ExtractionState.ToothHighlighted);
+            }
+            else
+            {
+                // Start with anesthesia
+                Debug.Log("Starting with anesthesia");
+                TransitionToState(ExtractionState.AnesthesiaRequired);
+            }
     }
     
     private void SelectRandomTargetTooth()
@@ -242,29 +326,57 @@ public class ToothExtractionSystem : MonoBehaviour
     
     private void Update()
     {
-        if (!procedureStarted || targetTooth == null) return;
-        
+        if (!procedureStarted || targetTooth == null) 
+        {
+            Debug.Log($"Update skipped - procedureStarted: {procedureStarted}, targetTooth: {(targetTooth != null ? "exists" : "null")}");
+            return;
+        }
+    
+        Debug.Log("=== UPDATE() CALLING UpdateProcedureState ===");
         UpdateProcedureState();
     }
     
     private void UpdateProcedureState()
     {
-        switch (currentState)
+        Debug.Log($"=== UpdateProcedureState ENTERED === Current state: {currentState}");
+        Debug.Log($"UpdateProcedureState called - Current state: {currentState}, Has handler: {currentStateHandler != null}");
+        if (currentStateHandler != null)
         {
-            case ExtractionState.ToothHighlighted:
-                CheckForForcepsProximity();
-                break;
+            Debug.Log("Using state handler");
+            currentStateHandler.UpdateState();
+        }
+        else
+        {
+            // Fallback to original code for unhandled states
+            Debug.Log($"No handler for state {currentState}, using original logic");
+        
+            switch (currentState)
+            {
+                case ExtractionState.ForcepsNearTooth:
+                    Debug.Log("Calling CheckExtractionProgress()");
+                    CheckExtractionProgress(); // Your original method
+                    break;
                 
-            case ExtractionState.ForcepsNearTooth:
-                CheckExtractionProgress();
-                break;
+                case ExtractionState.ExtractionInProgress:
+                    Debug.Log("Calling UpdateExtractionTimer()");
+                    UpdateExtractionTimer(); // Your original method
+                    break;
                 
-            case ExtractionState.ExtractionInProgress:
-                UpdateExtractionTimer();
-                break;
+                case ExtractionState.ToothExtracted:
+                    // Handle extraction completion
+                    Debug.Log("Tooth extracted state");
+                    break;
+                
+                default:
+                    Debug.LogWarning($"Unhandled state: {currentState}");
+                    break;
+            }
         }
     }
-    
+    public AudioSource GetAudioSource()
+    {
+        return audioSource;
+    }
     private void CheckForForcepsProximity()
     {
         GameObject forceps = FindForcepsInHands();
@@ -301,6 +413,7 @@ public class ToothExtractionSystem : MonoBehaviour
     
     private void CheckExtractionProgress()
     {
+        Debug.Log("=== CheckExtractionProgress() CALLED ===");
         GameObject forceps = FindForcepsInHands();
         if (forceps != null)
         {
@@ -315,6 +428,7 @@ public class ToothExtractionSystem : MonoBehaviour
             {
                 if (!extractionInProgress)
                 {
+                    Debug.Log("CheckExtractionProgress - Starting extraction");
                     StartExtraction();
                 }
             }
@@ -323,6 +437,7 @@ public class ToothExtractionSystem : MonoBehaviour
                 // Forceps moved away or stopped gripping
                 if (extractionInProgress)
                 {
+                    Debug.Log("CheckExtractionProgress - Stopping extraction");
                     StopExtraction();
                 }
                 currentState = ExtractionState.ToothHighlighted;
@@ -333,6 +448,7 @@ public class ToothExtractionSystem : MonoBehaviour
             // No forceps found
             if (extractionInProgress)
             {
+                Debug.Log("CheckExtractionProgress - No forceps, stopping extraction");
                 StopExtraction();
             }
             currentState = ExtractionState.ToothHighlighted;
@@ -341,20 +457,29 @@ public class ToothExtractionSystem : MonoBehaviour
     
     private void UpdateExtractionTimer()
     {
+        Debug.Log("=== UpdateExtractionTimer() CALLED ===");
         extractionTimer += Time.deltaTime;
-        
+        // Calculate progress
+        float progress = extractionTimer / extractionTime;
+    
+        // Update UI with progress (similar to anesthesia)
+        if (uiPanel != null)
+        {
+            uiPanel.UpdateProgress($"Extracting tooth... {extractionTimer:F1}s / {extractionTime:F1}s", progress);
+            Debug.Log($"UI updated with progress: {progress * 100:F1}%");
+        }
+    
         if (showDebugInfo)
         {
-            float progress = extractionTimer / extractionTime;
             Debug.Log($"Extraction progress: {progress * 100:F1}% ({extractionTimer:F1}s / {extractionTime:F1}s)");
         }
-        
+    
         if (extractionTimer >= extractionTime)
         {
             CompleteExtraction();
             return;
         }
-        
+    
         // Check if user is still gripping and close enough
         GameObject forceps = FindForcepsInHands();
         if (forceps == null)
@@ -363,7 +488,7 @@ public class ToothExtractionSystem : MonoBehaviour
             StopExtraction();
             return;
         }
-        
+    
         float distance = Vector3.Distance(forceps.transform.position, targetTooth.transform.position);
         if (distance > extractionDistance)
         {
@@ -371,7 +496,7 @@ public class ToothExtractionSystem : MonoBehaviour
             StopExtraction();
             return;
         }
-        
+    
         if (requireTriggerPress && !IsForcepsBeingUsed(forceps))
         {
             if (showDebugInfo) Debug.Log("Extraction stopped - trigger not pressed");
@@ -379,8 +504,19 @@ public class ToothExtractionSystem : MonoBehaviour
             return;
         }
     }
-    
-    private GameObject FindForcepsInHands()
+    public T GetState<T>() where T : ExtractionStateBase
+    {
+        foreach (var handler in stateHandlers.Values)
+        {
+            if (handler is T)
+            {
+                return handler as T;
+            }
+        }
+        return null;
+    }
+
+    public GameObject FindForcepsInHands()
     {
         if (toolSystem == null) return null;
         
@@ -416,7 +552,7 @@ public class ToothExtractionSystem : MonoBehaviour
         return null;
     }
     
-    private bool IsToolBeingHeld(GameObject tool)
+    public bool IsToolBeingHeld(GameObject tool)
     {
         // Use the same controller detection logic as MetaAutoGrabToolSystem
         Transform leftController = FindController("LeftHandAnchor");
@@ -577,16 +713,24 @@ public class ToothExtractionSystem : MonoBehaviour
     
     private void StartExtraction()
     {
+        Debug.Log("=== StartExtraction() CALLED ===");
         extractionInProgress = true;
         extractionTimer = 0f;
         currentState = ExtractionState.ExtractionInProgress;
         
+        // Update UI to show extraction started
+        if (uiPanel != null)
+        {
+            uiPanel.UpdateInstruction("Hold forceps firmly on tooth to extract...");
+            Debug.Log("UI updated to: Hold forceps firmly on tooth to extract...");
+        }
+    
         // Play extraction start sound
         if (extractionStartSound != null)
         {
             audioSource.PlayOneShot(extractionStartSound);
         }
-        
+    
         if (showDebugInfo)
         {
             Debug.Log("Starting tooth extraction...");
@@ -598,7 +742,13 @@ public class ToothExtractionSystem : MonoBehaviour
         extractionInProgress = false;
         extractionTimer = 0f;
         currentState = ExtractionState.ForcepsNearTooth;
-        
+    
+        // Update UI to show extraction interrupted
+        if (uiPanel != null)
+        {
+            uiPanel.UpdateInstruction("Extraction interrupted! Hold forceps on tooth and press trigger");
+        }
+    
         if (showDebugInfo)
         {
             Debug.Log("Extraction interrupted");

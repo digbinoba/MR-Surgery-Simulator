@@ -569,7 +569,7 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
                 
                 if (showDistanceDebug && leftDistance < 1f) // Only show when close
                 {
-                    Debug.Log($"Left to {tool.gameObject.name}: {leftDistance:F3}m (threshold: {hoverDistance:F3}m)");
+                    //Debug.Log($"Left to {tool.gameObject.name}: {leftDistance:F3}m (threshold: {hoverDistance:F3}m)");
                 }
             }
             
@@ -581,7 +581,7 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
                 
                 if (showDistanceDebug && rightDistance < 1f) // Only show when close
                 {
-                    Debug.Log($"Right to {tool.gameObject.name}: {rightDistance:F3}m (threshold: {hoverDistance:F3}m)");
+                    //Debug.Log($"Right to {tool.gameObject.name}: {rightDistance:F3}m (threshold: {hoverDistance:F3}m)");
                 }
             }
             
@@ -689,7 +689,7 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
             Transform controller = FindChildRecursive(trackingSpace, name);
             if (controller != null)
             {
-                Debug.Log($"Found controller: {controller.name} at {controller.position}");
+                //Debug.Log($"Found controller: {controller.name} at {controller.position}");
                 return controller;
             }
         }
@@ -698,7 +698,7 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
         Transform fallbackController = FindControllerByKeyword(trackingSpace, preferredName.Contains("Left") ? "left" : "right");
         if (fallbackController != null)
         {
-            Debug.Log($"Found controller (fallback): {fallbackController.name}");
+            //Debug.Log($"Found controller (fallback): {fallbackController.name}");
             return fallbackController;
         }
         

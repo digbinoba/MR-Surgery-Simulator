@@ -26,7 +26,8 @@ public class MetaBlocksTool : MonoBehaviour
         Scalpel,
         Syringe,
         DentalMirror,
-        Excavator
+        Excavator,
+        IrrigationSyringe
     }
     
     private void Awake()
@@ -51,6 +52,8 @@ public class MetaBlocksTool : MonoBehaviour
             toolType = ToolType.DentalForceps;
         else if (objName.Contains("scalpel") || objName.Contains("blade"))
             toolType = ToolType.Scalpel;
+        else if (objName.Contains("irrigation"))
+            toolType = ToolType.IrrigationSyringe;
         else if (objName.Contains("syringe") || objName.Contains("needle"))
             toolType = ToolType.Syringe;
         else if (objName.Contains("mirror"))

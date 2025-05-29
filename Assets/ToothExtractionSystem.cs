@@ -20,6 +20,16 @@ public class ToothExtractionSystem : MonoBehaviour
     public bool requireAnesthesiaInjection = true;
     public AudioClip anesthesiaSound;
 
+    [Header("Procedure Tracking")]
+    private Vector3 originalToothPosition;
+    private bool toothPositionStored = false;
+    
+    [Header("Socket Visual Feedback")]
+    public Material socketMaterial;
+    public bool showSocketIndicator = true;
+    public Vector3 socketOffset = new Vector3(0, -0.02f, 0); // Adjustable offset
+    public GameObject socketIndicator;
+    
     private bool anesthesiaComplete = false;
     private float anesthesiaTimer = 0f;
     private bool anesthesiaInProgress = false;
@@ -65,6 +75,8 @@ public class ToothExtractionSystem : MonoBehaviour
         ForcepsNearTooth,
         ExtractionInProgress,
         ToothExtracted,
+        SocketCleaning,        // NEW
+        ImplantPlacement,
         ProcedureComplete
     }
     
@@ -75,7 +87,18 @@ public class ToothExtractionSystem : MonoBehaviour
         InitializeSystem();
         InitializeStates();
     }
-    
+    // Add this property for states to access
+    public Vector3 SocketPosition 
+    { 
+        get 
+        { 
+            if (socketIndicator != null)
+            {
+                return socketIndicator.transform.position; // Use the independent socket position
+            }
+            return targetTooth != null ? targetTooth.transform.position : originalToothPosition;
+        }
+    }
     private void InitializeStates()
     {
         stateHandlers = new System.Collections.Generic.Dictionary<ExtractionState, ExtractionStateBase>();
@@ -90,6 +113,16 @@ public class ToothExtractionSystem : MonoBehaviour
         if (extractionState == null) extractionState = gameObject.AddComponent<ExtractionToothState>();
         stateHandlers[ExtractionState.ToothHighlighted] = extractionState;
     
+        // Add socket cleaning state
+        var socketCleaningState = gameObject.GetComponent<SocketCleaningState>();
+        if (socketCleaningState == null) socketCleaningState = gameObject.AddComponent<SocketCleaningState>();
+        stateHandlers[ExtractionState.SocketCleaning] = socketCleaningState;
+        
+        // Add implant placement state
+        var implantState = gameObject.GetComponent<ImplantPlacementState>();
+        if (implantState == null) implantState = gameObject.AddComponent<ImplantPlacementState>();
+        stateHandlers[ExtractionState.ImplantPlacement] = implantState;
+        
         // DON'T add handlers for ForcepsNearTooth, ExtractionInProgress, etc.
         // Let them use the original logic
     
@@ -237,6 +270,16 @@ public class ToothExtractionSystem : MonoBehaviour
         int randomIndex = Random.Range(0, availableTeeth.Length);
         targetTooth = availableTeeth[randomIndex];
         
+        // Store the original position for socket cleaning and implant placement
+        originalToothPosition = CalculateSocketPosition(targetTooth);
+        toothPositionStored = true;
+        
+        if (showDebugInfo)
+        {
+            Debug.Log($"Stored original tooth WORLD position: {originalToothPosition}");
+            Debug.Log($"Tooth local position: {targetTooth.transform.localPosition}");
+            Debug.Log($"Tooth world position: {targetTooth.transform.position}");
+        }
         // Store original material
         Renderer toothRenderer = targetTooth.GetComponent<Renderer>();
         if (toothRenderer != null)
@@ -573,7 +616,7 @@ public class ToothExtractionSystem : MonoBehaviour
         return false;
     }
     
-    private Transform FindController(string preferredName)
+    public Transform FindController(string preferredName)
     {
         // Use similar logic to MetaAutoGrabToolSystem's GetController method
         string[] rigNames = {"OVRCameraRig", "XR Origin", "XROrigin", "CameraRig", "Meta XR Origin"};
@@ -769,6 +812,9 @@ public class ToothExtractionSystem : MonoBehaviour
         // Make tooth grabbable BEFORE animation
         MakeToothGrabbable(targetTooth);
         
+        // CREATE SOCKET INDICATOR after tooth is extracted
+        CreateSocketIndicator();
+        
         // Animate tooth removal
         StartCoroutine(AnimateToothExtraction());
         
@@ -870,8 +916,8 @@ public class ToothExtractionSystem : MonoBehaviour
             }
         }
         
-        // Complete procedure
-        CompleteProcedure();
+        // Transition to socket cleaning instead of completing
+        TransitionToState(ExtractionState.SocketCleaning);
     }
     
     private void CompleteProcedure()
@@ -906,6 +952,14 @@ public class ToothExtractionSystem : MonoBehaviour
             // Reset position (if moved)
             // You might want to store original position/rotation
         }
+        // Clean up socket indicator
+        if (socketIndicator != null)
+        {
+            Destroy(socketIndicator);
+            socketIndicator = null;
+        }
+    
+        toothPositionStored = false;
         
         // Clean up highlight
         if (targetToothHighlight != null)
@@ -1042,6 +1096,187 @@ public class ToothExtractionSystem : MonoBehaviour
             float distance = Vector3.Distance(forceps.transform.position, targetTooth.transform.position);
             Debug.Log($"Forceps to tooth distance: {distance:F3}m (threshold: {extractionDistance:F3}m)");
         }
+    }
+private void CreateSocketIndicator()
+{
+    if (!showSocketIndicator || targetTooth == null) return;
+    
+    // Clean up existing indicator
+    if (socketIndicator != null)
+    {
+        Destroy(socketIndicator);
+    }
+    
+    // Create a full duplicate of the tooth
+    socketIndicator = Instantiate(targetTooth);
+    socketIndicator.name = $"{targetTooth.name}_SocketIndicator";
+    
+    // Make it a child of the teeth parent (one level up from the tooth)
+    Transform teethParent = targetTooth.transform.parent;
+    if (teethParent != null)
+    {
+        socketIndicator.transform.SetParent(teethParent);
+    }
+    
+    // Keep the exact same position, rotation, and scale as the original tooth
+    socketIndicator.transform.position = targetTooth.transform.position;
+    socketIndicator.transform.rotation = targetTooth.transform.rotation;
+    socketIndicator.transform.localScale = targetTooth.transform.localScale;
+    
+    // Remove any highlight children (we don't need them)
+    Transform[] allChildren = socketIndicator.GetComponentsInChildren<Transform>();
+    foreach (Transform child in allChildren)
+    {
+        if (child.name.Contains("Highlight") || child.name.Contains("highlight"))
+        {
+            if (showDebugInfo)
+            {
+                Debug.Log($"Removing highlight child: {child.name}");
+            }
+            Destroy(child.gameObject);
+        }
+    }
+    
+    // Remove any existing pulse animation components
+    ToothPulseAnimation[] existingPulse = socketIndicator.GetComponentsInChildren<ToothPulseAnimation>();
+    foreach (ToothPulseAnimation pulse in existingPulse)
+    {
+        Destroy(pulse);
+    }
+    
+    // Disable ISDK_HandGrabInteraction so it can't be grabbed
+    Transform handGrabInteraction = socketIndicator.transform.Find("ISDK_HandGrabInteraction");
+    if (handGrabInteraction != null)
+    {
+        handGrabInteraction.gameObject.SetActive(false);
+        if (showDebugInfo)
+        {
+            Debug.Log("Disabled ISDK_HandGrabInteraction on socket indicator");
+        }
+    }
+    else
+    {
+        // Search recursively for ISDK_HandGrabInteraction
+        Transform[] allChildrenForGrab = socketIndicator.GetComponentsInChildren<Transform>();
+        foreach (Transform child in allChildrenForGrab)
+        {
+            if (child.name == "ISDK_HandGrabInteraction")
+            {
+                child.gameObject.SetActive(false);
+                if (showDebugInfo)
+                {
+                    Debug.Log($"Disabled ISDK_HandGrabInteraction on {child.name}");
+                }
+                break;
+            }
+        }
+    }
+    
+    // Change the material to red socket material for all renderers
+    MeshRenderer[] allRenderers = socketIndicator.GetComponentsInChildren<MeshRenderer>();
+    
+    if (socketMaterial == null)
+    {
+        socketMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+        socketMaterial.color = Color.red;
+        socketMaterial.EnableKeyword("_EMISSION");
+        socketMaterial.SetColor("_EmissionColor", Color.red * 0.5f);
+    }
+    
+    foreach (MeshRenderer renderer in allRenderers)
+    {
+        renderer.material = socketMaterial;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+    }
+    
+    // Add pulsing animation to the main socket indicator object
+    if (enablePulseAnimation)
+    {
+        SocketPulseAnimation pulseScript = socketIndicator.AddComponent<SocketPulseAnimation>();
+        if (showDebugInfo)
+        {
+            Debug.Log("Added SocketPulseAnimation to socket indicator");
+        }
+    }
+    
+    if (showDebugInfo)
+    {
+        Debug.Log($"Created cleaned socket indicator: {socketIndicator.name}");
+        Debug.Log($"Socket has {allRenderers.Length} renderers");
+    }
+}
+public void UpdateSocketIndicatorColor(Color newColor, string phase = "", float transparency = 0.25f)
+{
+    if (socketIndicator != null)
+    {
+        SocketPulseAnimation pulseAnimation = socketIndicator.GetComponent<SocketPulseAnimation>();
+        if (pulseAnimation != null)
+        {
+            pulseAnimation.SetGlowColor(newColor, transparency);
+        }
+        
+        if (showDebugInfo && !string.IsNullOrEmpty(phase))
+        {
+            Debug.Log($"Socket indicator glow set to {newColor} with {transparency * 100}% opacity for phase: {phase}");
+        }
+    }
+}
+    private Vector3 CalculateSocketPosition(GameObject tooth)
+    {
+        if (tooth == null) return Vector3.zero;
+    
+        // Get the visual bounds of the tooth (including all child renderers)
+        Bounds toothBounds = GetToothVisualBounds(tooth);
+    
+        // The socket should be at the bottom center of the tooth
+        Vector3 socketPosition = toothBounds.center;
+        socketPosition.y = toothBounds.min.y; // Bottom of the tooth bounds
+    
+        if (showDebugInfo)
+        {
+            Debug.Log($"Tooth {tooth.name}:");
+            Debug.Log($"  World Position: {tooth.transform.position}");
+            Debug.Log($"  Visual Bounds Center: {toothBounds.center}");
+            Debug.Log($"  Visual Bounds Min: {toothBounds.min}");
+            Debug.Log($"  Visual Bounds Max: {toothBounds.max}");
+            Debug.Log($"  Calculated Socket Position: {socketPosition}");
+        }
+    
+        return socketPosition;
+    }
+
+    private Bounds GetToothVisualBounds(GameObject tooth)
+    {
+        Bounds bounds = new Bounds(tooth.transform.position, Vector3.zero);
+        bool hasBounds = false;
+    
+        // Get bounds from all child renderers (this gets the actual visual bounds)
+        MeshRenderer[] renderers = tooth.GetComponentsInChildren<MeshRenderer>();
+    
+        foreach (MeshRenderer renderer in renderers)
+        {
+            if (renderer.bounds.size.magnitude > 0)
+            {
+                if (!hasBounds)
+                {
+                    bounds = renderer.bounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(renderer.bounds);
+                }
+            }
+        }
+    
+        if (!hasBounds)
+        {
+            // Fallback to transform position if no renderers found
+            bounds = new Bounds(tooth.transform.position, Vector3.one * 0.02f);
+        }
+    
+        return bounds;
     }
 }
 

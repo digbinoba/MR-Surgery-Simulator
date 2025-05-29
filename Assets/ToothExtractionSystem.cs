@@ -637,63 +637,19 @@ public class ToothExtractionSystem : MonoBehaviour
     private void MakeToothGrabbable(GameObject tooth)
     {
         if (tooth == null) return;
-        
-        // Add Rigidbody if not present
-        Rigidbody toothRigidbody = tooth.GetComponent<Rigidbody>();
-        if (toothRigidbody == null)
+    
+        // Find and enable the ISDK_HandGrabInteraction child object
+        Transform handGrabInteraction = tooth.transform.Find("ISDK_HandGrabInteraction");
+        if (handGrabInteraction != null)
         {
-            toothRigidbody = tooth.AddComponent<Rigidbody>();
+            handGrabInteraction.gameObject.SetActive(true);
+            Debug.Log($"Enabled ISDK_HandGrabInteraction for {tooth.name}");
         }
-        
-        // Configure rigidbody for VR interaction
-        toothRigidbody.useGravity = true;
-        toothRigidbody.isKinematic = false;
-        toothRigidbody.mass = 0.01f; // Light weight for a tooth
-        toothRigidbody.drag = 2f; // Some air resistance
-        toothRigidbody.angularDrag = 5f; // Rotational damping
-        
-        // Add collider if not present
-        Collider toothCollider = tooth.GetComponent<Collider>();
-        if (toothCollider == null)
+        else
         {
-            // Try to create appropriate collider based on tooth shape
-            Bounds toothBounds = GetToothBounds(tooth);
-            if (toothBounds.size.magnitude > 0)
-            {
-                BoxCollider boxCollider = tooth.AddComponent<BoxCollider>();
-                boxCollider.size = toothBounds.size;
-                boxCollider.center = toothBounds.center - tooth.transform.position;
-            }
-            else
-            {
-                // Fallback small collider
-                BoxCollider boxCollider = tooth.AddComponent<BoxCollider>();
-                boxCollider.size = Vector3.one * 0.02f; // 2cm cube
-            }
-        }
-        
-        // Add MetaBlocksTool component to make it grabbable
-        MetaBlocksTool toothTool = tooth.GetComponent<MetaBlocksTool>();
-        if (toothTool == null)
-        {
-            toothTool = tooth.AddComponent<MetaBlocksTool>();
-            toothTool.toolName = $"Extracted {tooth.name}";
-            toothTool.toolType = MetaBlocksTool.ToolType.Excavator; // Use as generic grabbable
-        }
-        
-        // Register with the tool system so it gets outlines and interactions
-        if (toolSystem != null)
-        {
-            // Add to the tool system's tracking
-            toolSystem.RegisterTool(tooth);
-        }
-        
-        if (showDebugInfo)
-        {
-            Debug.Log($"Made tooth grabbable: {tooth.name}");
+            Debug.LogWarning($"ISDK_HandGrabInteraction not found in {tooth.name}");
         }
     }
-    
     private Bounds GetToothBounds(GameObject tooth)
     {
         Bounds bounds = new Bounds(tooth.transform.position, Vector3.zero);

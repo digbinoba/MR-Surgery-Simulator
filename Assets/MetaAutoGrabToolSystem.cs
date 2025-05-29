@@ -24,6 +24,10 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
     public AudioClip toolReleaseSound;
     public AudioClip toolHoverSound;
     
+    [Header("Controller Replacement")]
+    public bool enableControllerReplacement = true;
+    public bool showDebugControllerInfo = false;
+    
     [Header("Debug")]
     public bool enableDebugLogs = false;
     public bool showDistanceDebug = false;
@@ -33,6 +37,62 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
     
     private List<AutoGrabTool> allTools = new List<AutoGrabTool>();
     private AudioSource audioSource;
+    
+    // Controller replacement tracking
+    private Dictionary<Transform, ControllerInfo> controllerInfos = new Dictionary<Transform, ControllerInfo>();
+    
+    [System.Serializable]
+    public class ControllerInfo
+    {
+        public Transform controllerTransform;
+        public List<GameObject> controllerModels = new List<GameObject>();
+        public AutoGrabTool heldTool;
+        public bool isHoldingTool;
+        
+        public ControllerInfo(Transform controller)
+        {
+            controllerTransform = controller;
+            FindControllerModels();
+        }
+        
+        public void FindControllerModels()
+        {
+            controllerModels.Clear();
+            
+            // Find all renderers in the controller hierarchy
+            Renderer[] renderers = controllerTransform.GetComponentsInChildren<Renderer>();
+            foreach (Renderer renderer in renderers)
+            {
+                // Skip outline objects and other non-controller visuals
+                if (!renderer.name.ToLower().Contains("outline"))
+                {
+                    controllerModels.Add(renderer.gameObject);
+                }
+            }
+        }
+        
+        public void HideControllerModels()
+        {
+            foreach (GameObject model in controllerModels)
+            {
+                if (model != null)
+                {
+                    model.SetActive(false);
+                }
+            }
+        }
+        
+        public void ShowControllerModels()
+        {
+            foreach (GameObject model in controllerModels)
+            {
+                if (model != null)
+                {
+                    model.SetActive(true);
+                }
+            }
+        }
+    }
     
     [System.Serializable]
     public class AutoGrabTool
@@ -71,6 +131,9 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
             CreateOutlineMaterial();
         }
         
+        // Initialize controller tracking
+        InitializeControllerTracking();
+        
         // Setup existing tools
         SetupExistingTools();
         
@@ -78,6 +141,39 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
         SpawnToolPrefabs();
         
         Debug.Log($"Meta Auto Grab Tool System initialized with {allTools.Count} tools");
+    }
+    
+    private void InitializeControllerTracking()
+    {
+        if (!enableControllerReplacement) return;
+        
+        // Find and setup controller tracking
+        Transform leftController = GetController("LeftHandAnchor");
+        Transform rightController = GetController("RightHandAnchor");
+        
+        if (leftController != null)
+        {
+            ControllerInfo leftInfo = new ControllerInfo(leftController);
+            controllerInfos[leftController] = leftInfo;
+            
+            if (showDebugControllerInfo)
+            {
+                Debug.Log($"Left controller setup: found {leftInfo.controllerModels.Count} visual components");
+            }
+        }
+        
+        if (rightController != null)
+        {
+            ControllerInfo rightInfo = new ControllerInfo(rightController);
+            controllerInfos[rightController] = rightInfo;
+            
+            if (showDebugControllerInfo)
+            {
+                Debug.Log($"Right controller setup: found {rightInfo.controllerModels.Count} visual components");
+            }
+        }
+        
+        Debug.Log($"Controller replacement system initialized for {controllerInfos.Count} controllers");
     }
     
     private void CreateOutlineMaterial()
@@ -317,6 +413,133 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
         if (enableHoverOutlines)
         {
             UpdateHoverDetection();
+        }
+        
+        if (enableControllerReplacement)
+        {
+            UpdateControllerReplacement();
+        }
+    }
+    
+    private void UpdateControllerReplacement()
+    {
+        // Check each controller for tool grab state changes
+        foreach (var controllerPair in controllerInfos)
+        {
+            Transform controller = controllerPair.Key;
+            ControllerInfo controllerInfo = controllerPair.Value;
+            
+            // Find if any tool is currently being held by this controller
+            AutoGrabTool currentlyHeldTool = FindToolHeldByController(controller);
+            
+            // Check if the held tool state changed
+            if (currentlyHeldTool != controllerInfo.heldTool)
+            {
+                // State changed - update controller visibility
+                if (currentlyHeldTool != null)
+                {
+                    // Tool was grabbed
+                    OnToolGrabbedByController(controller, currentlyHeldTool, controllerInfo);
+                }
+                else
+                {
+                    // Tool was released
+                    OnToolReleasedByController(controller, controllerInfo);
+                }
+                
+                controllerInfo.heldTool = currentlyHeldTool;
+                controllerInfo.isHoldingTool = (currentlyHeldTool != null);
+            }
+        }
+    }
+    
+    private AutoGrabTool FindToolHeldByController(Transform controller)
+    {
+        foreach (AutoGrabTool tool in allTools)
+        {
+            if (tool.gameObject != null && IsToolBeingHeldByController(tool, controller))
+            {
+                return tool;
+            }
+        }
+        return null;
+    }
+    
+    private bool IsToolBeingHeldByController(AutoGrabTool tool, Transform controller)
+    {
+        // Check if the tool is parented to this controller (Meta's grab system often does this)
+        Transform currentParent = tool.gameObject.transform.parent;
+        while (currentParent != null)
+        {
+            if (currentParent == controller)
+            {
+                return true;
+            }
+            currentParent = currentParent.parent;
+        }
+        
+        // Alternative check: see if tool is very close to controller (within grab range)
+        float distance = Vector3.Distance(tool.gameObject.transform.position, controller.position);
+        if (distance < 0.2f) // Very close = likely grabbed
+        {
+            // Additional check: see if tool has Meta's grabbed components in active state
+            if (HasActiveGrabbedComponents(tool.gameObject))
+            {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    private bool HasActiveGrabbedComponents(GameObject tool)
+    {
+        // Check for common Meta grab components that indicate the tool is being held
+        Component[] components = tool.GetComponents<Component>();
+        foreach (Component comp in components)
+        {
+            string typeName = comp.GetType().Name;
+            if (typeName.Contains("Grabbable") || typeName.Contains("GrabInteractable"))
+            {
+                // Tool has grabbable components - assume it can detect its own grabbed state
+                // This is a simplified check; Meta's system handles the actual grab detection
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    private void OnToolGrabbedByController(Transform controller, AutoGrabTool tool, ControllerInfo controllerInfo)
+    {
+        // Hide controller models
+        controllerInfo.HideControllerModels();
+        
+        if (showDebugControllerInfo)
+        {
+            Debug.Log($"Tool {tool.gameObject.name} grabbed by controller {controller.name} - hiding controller models");
+        }
+        
+        // Play grab sound
+        if (toolGrabSound != null)
+        {
+            audioSource.PlayOneShot(toolGrabSound);
+        }
+    }
+    
+    private void OnToolReleasedByController(Transform controller, ControllerInfo controllerInfo)
+    {
+        // Show controller models
+        controllerInfo.ShowControllerModels();
+        
+        if (showDebugControllerInfo)
+        {
+            Debug.Log($"Tool released by controller {controller.name} - showing controller models");
+        }
+        
+        // Play release sound
+        if (toolReleaseSound != null)
+        {
+            audioSource.PlayOneShot(toolReleaseSound);
         }
     }
     
@@ -605,6 +828,84 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
                 }
             }
         }
+    }
+    
+    [ContextMenu("Debug Controller Models")]
+    public void DebugControllerModels()
+    {
+        Debug.Log("=== Controller Models Debug ===");
+        
+        foreach (var controllerPair in controllerInfos)
+        {
+            Transform controller = controllerPair.Key;
+            ControllerInfo info = controllerPair.Value;
+            
+            Debug.Log($"Controller: {controller.name}");
+            Debug.Log($"  - Holding tool: {info.isHoldingTool}");
+            Debug.Log($"  - Held tool: {(info.heldTool?.gameObject.name ?? "None")}");
+            Debug.Log($"  - Model count: {info.controllerModels.Count}");
+            
+            for (int i = 0; i < info.controllerModels.Count; i++)
+            {
+                GameObject model = info.controllerModels[i];
+                if (model != null)
+                {
+                    Debug.Log($"    [{i}] {model.name} - Active: {model.activeInHierarchy}");
+                }
+            }
+        }
+    }
+    
+    [ContextMenu("Force Show All Controllers")]
+    public void ForceShowAllControllers()
+    {
+        Debug.Log("Forcing all controller models to show");
+        foreach (var controllerPair in controllerInfos)
+        {
+            controllerPair.Value.ShowControllerModels();
+        }
+    }
+    
+    [ContextMenu("Force Hide All Controllers")]
+    public void ForceHideAllControllers()
+    {
+        Debug.Log("Forcing all controller models to hide");
+        foreach (var controllerPair in controllerInfos)
+        {
+            controllerPair.Value.HideControllerModels();
+        }
+    }
+    
+    [ContextMenu("Test Controller Replacement")]
+    public void TestControllerReplacement()
+    {
+        Debug.Log("=== Testing Controller Replacement ===");
+        
+        if (!enableControllerReplacement)
+        {
+            Debug.LogWarning("Controller replacement is disabled!");
+            return;
+        }
+        
+        // Find controllers
+        Transform leftController = GetController("LeftHandAnchor");
+        Transform rightController = GetController("RightHandAnchor");
+        
+        Debug.Log($"Left controller found: {leftController != null}");
+        Debug.Log($"Right controller found: {rightController != null}");
+        
+        foreach (var controllerPair in controllerInfos)
+        {
+            ControllerInfo info = controllerPair.Value;
+            Debug.Log($"Controller {controllerPair.Key.name} has {info.controllerModels.Count} visual models");
+        }
+        
+        // Test hide/show cycle
+        Debug.Log("Testing hide/show cycle...");
+        ForceHideAllControllers();
+        
+        // Show them again after 2 seconds
+        Invoke(nameof(ForceShowAllControllers), 2f);
     }
     
     [ContextMenu("Find All VR Objects")]

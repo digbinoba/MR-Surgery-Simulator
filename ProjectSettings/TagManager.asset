@@ -6,6 +6,7 @@ TagManager:
   tags:
   - SurgicalTable
   - Tool
+  - Tooth
   layers:
   - Default
   - TransparentFX

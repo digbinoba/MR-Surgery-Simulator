@@ -752,6 +752,27 @@ public class MetaAutoGrabToolSystem : MonoBehaviour
         return outlineMaterial;
     }
     
+    // Public method to register new tools (like extracted teeth)
+    public void RegisterTool(GameObject toolObject)
+    {
+        if (toolObject == null) return;
+        
+        // Check if already registered
+        foreach (AutoGrabTool existingTool in allTools)
+        {
+            if (existingTool.gameObject == toolObject)
+            {
+                Debug.Log($"Tool {toolObject.name} already registered");
+                return;
+            }
+        }
+        
+        // Add the tool using existing logic
+        AddAutoGrabTool(toolObject);
+        
+        Debug.Log($"Registered new tool: {toolObject.name}");
+    }
+    
     // Context menu options for easy setup
     [ContextMenu("Setup Common Dental Tools")]
     public void SetupCommonDentalTools()
